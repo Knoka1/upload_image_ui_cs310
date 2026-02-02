@@ -1,9 +1,24 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import FileResponse
+from fastapi.middleware.cors import CORSMiddleware
 import photoapp
 import os
 
 app = FastAPI(title="PhotoApp API", version="1.0.0")
+
+# Enable CORS for frontend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173", "http://localhost:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+@app.on_event("startup")
+def startup_event():
+    """Initialize photoapp on startup"""
+    photoapp.initialize('photoapp-config.ini', 's3readwrite', 'photoapp-read-write')
 
 
 @app.post("/initialize")
