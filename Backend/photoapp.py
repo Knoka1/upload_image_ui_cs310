@@ -1,0 +1,760 @@
+#
+# PhotoApp API functions, supporting downloading and uploading images to S3,
+# along with retrieving and updating data in associated photoapp database.
+#
+# Initial code (initialize, get_ping, get_* helper functions):
+#   Prof. Joe Hummel
+#   Northwestern University
+#
+
+import logging
+import pymysql
+import os
+import boto3
+import uuid
+
+from botocore.client import Config
+from configparser import ConfigParser
+from tenacity import retry, stop_after_attempt, wait_exponential
+
+#
+# module-level varibles:
+#
+PHOTOAPP_CONFIG_FILE = 'set via call to initialize()'
+
+
+###################################################################
+#
+# get_dbConn
+#
+# create and return connection object, based on configuration
+# information in app config file. You should call close() on 
+# the object when you are done.
+#
+def get_dbConn():
+  """
+  Reads the configuration info from app config file, creates
+  pymysql connection object based on this info, and returns it.
+  You should call close() on the object when you are done.
+
+  Parameters
+  ----------
+  N/A
+
+  Returns
+  -------
+  pymysql connection object
+  """
+
+  try:
+    #
+    # obtain database server config info:
+    #  
+    configur = ConfigParser()
+    configur.read(PHOTOAPP_CONFIG_FILE)
+
+    endpoint = configur.get('rds', 'endpoint')
+    portnum = int(configur.get('rds', 'port_number'))
+    username = configur.get('rds', 'user_name')
+    pwd = configur.get('rds', 'user_pwd')
+    dbname = configur.get('rds', 'db_name')
+
+    #
+    # now create connection object and return it:
+    #
+    dbConn = pymysql.connect(host=endpoint,
+                port=portnum,
+                user=username,
+                passwd=pwd,
+                database=dbname,
+                #
+                # allow execution of a query string with multiple SQL queries:
+                #
+                client_flag=pymysql.constants.CLIENT.MULTI_STATEMENTS)
+
+    return dbConn
+  
+  except Exception as err:
+    logging.error("get_dbconn():")
+    logging.error(str(err))
+    raise
+
+
+###################################################################
+#
+# get_bucket
+#
+# create and return bucket object, based on configuration
+# information in app config file. You should call close() 
+# on the object when you are done.
+#
+def get_bucket():
+  """
+  Reads the configuration info from app config file, creates
+  a bucket object based on this info, and returns it. You 
+  should call close() on the object when you are done.
+
+  Parameters
+  ----------
+  N/A
+
+  Returns
+  -------
+  S3 bucket object
+  """
+
+  try:
+    #
+    # configure S3 access using config file:
+    #  
+    configur = ConfigParser()
+    configur.read(PHOTOAPP_CONFIG_FILE)
+    bucketname = configur.get('s3', 'bucket_name')
+    regionname = configur.get('s3', 'region_name')
+
+    s3 = boto3.resource(
+           's3',
+           region_name=regionname,
+           config = Config(
+             retries = {
+               'max_attempts': 3,
+               'mode': 'standard'
+             }
+           )
+         )
+
+    bucket = s3.Bucket(bucketname)
+
+    return bucket
+  
+  except Exception as err:
+    logging.error("get_bucket():")
+    logging.error(str(err))
+    raise
+  
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=30), reraise=True)
+def get_users():
+    try:
+        dbConn = get_dbConn()
+        dbCursor = dbConn.cursor()
+
+        sql = "SELECT userid, username, givenname, familyname FROM users ORDER BY userid ASC;"
+        dbCursor.execute(sql)
+        rows = dbCursor.fetchall()
+
+        return list(rows)
+
+    except Exception as err:
+        logging.error("get_users():")
+        logging.error(str(err))
+        raise
+
+    finally:
+        try:
+            dbCursor.close()
+        except:
+            pass
+        try:
+            dbConn.close()
+        except:
+            pass
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=30), reraise=True)
+def get_images(userid=None):
+    try:
+        dbConn = get_dbConn()
+        dbCursor = dbConn.cursor()
+
+        if userid is None:
+            sql = "SELECT assetid, userid, localname, bucketkey FROM assets ORDER BY assetid ASC;"
+            dbCursor.execute(sql)
+        else:
+            sql = "SELECT assetid, userid, localname, bucketkey FROM assets WHERE userid = %s ORDER BY assetid ASC;"
+            dbCursor.execute(sql, (userid,))
+        
+        rows = dbCursor.fetchall()
+
+        return list(rows)
+
+    except Exception as err:
+        logging.error("get_images():")
+        logging.error(str(err))
+        raise
+
+    finally:
+        try:
+            dbCursor.close()
+        except:
+            pass
+        try:
+            dbConn.close()
+        except:
+            pass
+def post_image(userid, local_filename):
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=30), reraise=True)
+    def get_username():
+        try:
+            dbConn = get_dbConn()
+            dbCursor = dbConn.cursor()
+
+            sql = "SELECT username FROM users WHERE userid = %s;"
+            dbCursor.execute(sql, (userid,))
+            row = dbCursor.fetchone()
+
+            if row is None:
+              raise ValueError("no such userid")
+            
+            return row[0]
+
+        except Exception as err:
+            logging.error("post_image.get_username():")
+            logging.error(str(err))
+            raise
+        
+        finally:
+            try: 
+                dbCursor.close()
+            except: 
+                pass
+            try:
+                dbConn.close()
+            except:
+                pass
+
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=30), reraise=True)
+    def insert_db(bucketkey):
+        try:
+          dbConn = get_dbConn()
+          dbCursor = dbConn.cursor()
+
+          dbConn.begin()
+
+          sql = """
+              INSERT INTO assets (userid, localname, bucketkey)
+              VALUES (%s, %s, %s);
+              """
+            
+          dbCursor.execute(sql, (userid, local_filename, bucketkey))
+
+          sql = "SELECT LAST_INSERT_ID();"
+          dbCursor.execute(sql)
+          row = dbCursor.fetchone()
+          assetid = row[0]
+            
+          dbConn.commit()
+            
+          return assetid
+
+        except Exception as err:
+          logging.error("post_image.insert_db():")
+          logging.error(str(err))
+          try:
+            dbConn.rollback()
+          except:
+            pass
+          raise
+        
+        finally:
+          try: 
+            dbCursor.close()
+          except: 
+            pass
+          try:
+            dbConn.close()
+          except:
+            pass
+
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=30), reraise=True)
+    def insert_labels(assetid, labels):
+        try:
+          dbConn = get_dbConn()
+          dbCursor = dbConn.cursor()
+
+          dbConn.begin()
+
+          insert_assetlabel_sql = """
+              INSERT INTO assetlabels (assetid, label, confidence)
+              VALUES (%s, %s, %s);
+            """
+          # Properly processes a dictionary as returned by Rekognition
+          for label in labels:
+            label_name = label.get('Name')
+            confidence = label.get('Confidence')
+            dbCursor.execute(insert_assetlabel_sql, (assetid, label_name, int(confidence)))
+
+          dbConn.commit()
+
+        except Exception as err:
+          logging.error("post_image.insert_labels():")
+          logging.error(str(err))
+          try:
+            dbConn.rollback()
+          except:
+            pass
+          raise
+        
+        finally:
+          try: 
+            dbCursor.close()
+          except: 
+            pass
+          try:
+            dbConn.close()
+          except:
+            pass
+    
+    try:
+        username = get_username()
+        
+        unique_part = str(uuid.uuid4())
+        bucketkey = f"{username}/{unique_part}-{local_filename}"
+        
+        bucket = get_bucket()
+        bucket.upload_file(local_filename, bucketkey)
+        
+        assetid = insert_db(bucketkey)
+        
+        try:
+            rekognition = get_rekognition()
+            response = rekognition.detect_labels(
+              Image={
+                'S3Object': {
+                  'Bucket': bucket.name,
+                  'Name': bucketkey
+                }
+              },
+              MaxLabels=100,
+              MinConfidence=80
+            )
+            labels = response['Labels']
+            
+            if labels:
+              insert_labels(assetid, labels)
+        except Exception as err:
+            logging.warning("post_image: Rekognition failed")
+            logging.warning(str(err))
+        
+        return assetid
+    
+    except Exception as err:
+        logging.error("post_image():")
+        logging.error(str(err))
+        raise
+    
+def get_image(assetid, local_filename=None):
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=30), reraise=True)
+    def get_bucketkey_and_localname():
+        try:
+            dbConn = get_dbConn()
+            dbCursor = dbConn.cursor()
+
+            sql = "SELECT bucketkey, localname FROM assets WHERE assetid = %s;"
+            dbCursor.execute(sql, (assetid,))
+            row = dbCursor.fetchone()
+
+            if row is None:
+                raise ValueError(f"no such assetid")
+            
+            bucketkey = row[0]
+            db_local_filename = row[1]
+            
+            return bucketkey, db_local_filename
+
+        except Exception as err:
+            logging.error("get_image.get_bucketkey_and_localname():")
+            logging.error(str(err))
+            raise
+        
+        finally:
+            try: 
+                dbCursor.close()
+            except: 
+                pass
+            try:
+                dbConn.close()
+            except:
+                pass
+    
+    try:
+        bucketkey, db_local_filename = get_bucketkey_and_localname()
+        
+        if local_filename is None:
+            local_filename = db_local_filename
+        
+        bucket = get_bucket()
+        bucket.download_file(bucketkey, local_filename)
+        
+        return local_filename
+
+    except Exception as err:
+        logging.error("get_image():")
+        logging.error(str(err))
+        raise
+def delete_images():
+  @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=30), reraise=True)
+  def delete_all_images():
+    try:
+      dbConn = get_dbConn()
+      dbCursor = dbConn.cursor()
+
+      dbConn.begin()
+
+      dbCursor.execute("SELECT bucketkey FROM assets;")
+      keys = [row[0] for row in dbCursor.fetchall()]
+
+      sql = """
+        SET foreign_key_checks = 0;
+        TRUNCATE TABLE assetlabels;
+        TRUNCATE TABLE assets;
+        SET foreign_key_checks = 1;
+        ALTER TABLE assets AUTO_INCREMENT = 1001;
+        """
+      dbCursor.execute(sql)
+
+      dbConn.commit()
+
+      return keys
+
+    except Exception as err:
+      logging.error("delete_images.delete_all_images():")
+      logging.error(str(err))
+      try:
+        dbConn.rollback()
+      except:
+        pass
+      raise
+        
+    finally:
+      try: 
+        dbCursor.close()
+      except: 
+        pass
+      try:
+        dbConn.close()
+      except:
+        pass
+    
+  try:
+    bucketkeys = delete_all_images()
+
+    if bucketkeys:
+      objects_to_delete = [{'Key': key} for key in bucketkeys]
+      bucket = get_bucket()
+      bucket.delete_objects(Delete={'Objects': objects_to_delete})
+
+    return True
+
+  except Exception as err:
+    logging.error("delete_images():")
+    logging.error(str(err))
+    raise
+
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=30), reraise=True)
+def get_image_labels(assetid):
+  try:
+    dbConn = get_dbConn()
+    dbCursor = dbConn.cursor()
+
+    sql = "SELECT assetid FROM assets WHERE assetid = %s;"
+    dbCursor.execute(sql, (assetid,))
+    row = dbCursor.fetchone()
+        
+    if row is None:
+      raise ValueError("no such assetid")
+
+    sql = """
+      SELECT label, confidence
+      FROM assetlabels
+      WHERE assetid = %s
+      ORDER BY label ASC;
+      """
+    dbCursor.execute(sql, (assetid,))
+    rows = dbCursor.fetchall()
+
+    return list(rows)
+
+  except Exception as err:
+    logging.error("get_image_labels():")
+    logging.error(str(err))
+    raise
+
+  finally:
+    try:
+      dbCursor.close()
+    except:
+      pass
+    try:
+      dbConn.close()
+    except:
+      pass
+
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=30), reraise=True)
+def get_images_with_label(label):
+  try:
+    dbConn = get_dbConn()
+    dbCursor = dbConn.cursor()
+
+    search_pattern = "%" + str(label) + "%"
+    
+    sql = """
+      SELECT assetid, label, confidence
+      FROM assetlabels
+      WHERE label LIKE %s
+      ORDER BY assetid ASC, label ASC;
+      """
+    dbCursor.execute(sql, [search_pattern])
+    rows = dbCursor.fetchall()
+
+    return list(rows)
+
+  except Exception as err:
+    logging.error("get_images_with_label():")
+    logging.error(str(err))
+    raise
+
+  finally:
+    try:
+      dbCursor.close()
+    except:
+      pass
+    try:
+      dbConn.close()
+    except:
+      pass
+
+###################################################################
+#
+# get_rekognition
+#
+# create and return rekognition object, based on configuration
+# information in app config file. You should call close() on
+# the object when you are done.
+#
+def get_rekognition():
+  """
+  Reads the configuration info from app config file, creates
+  a rekognition object based on this info, and returns it.
+  You should call close() on the object when you are done.
+
+  Parameters
+  ----------
+  N/A
+
+  Returns
+  -------
+  Rekognition object
+  """
+
+  try:
+    #
+    # configure S3 access using config file:
+    #  
+    configur = ConfigParser()
+    configur.read(PHOTOAPP_CONFIG_FILE)
+    regionname = configur.get('s3', 'region_name')
+
+    rekognition = boto3.client(
+                    'rekognition', 
+                    region_name=regionname,
+                    config = Config(
+                      retries = {
+                        'max_attempts': 3,
+                        'mode': 'standard'
+                      }
+                    )
+                  )
+
+    return rekognition
+  
+  except Exception as err:
+    logging.error("get_rekognition():")
+    logging.error(str(err))
+    raise
+
+
+###################################################################
+#
+# initialize
+#
+# Initializes local environment need to access AWS, based on
+# given configuration file and user profiles. Call this function
+# only once, and call before calling any other API functions.
+#
+# NOTE: does not check to make sure we can actually reach and
+# login to S3 and database server. Call get_ping() to check.
+#
+def initialize(config_file, s3_profile, mysql_user):
+  """
+  Initializes local environment for AWS access, returning True
+  if successful and raising an exception if not. Call this 
+  function only once, and call before calling any other API
+  functions.
+  
+  Parameters
+  ----------
+  config_file is the name of configuration file, probably 'photoapp-config.ini'
+  s3_profile to use for accessing S3, probably 's3readwrite'
+  mysql_user to use for accessing database, probably 'photoapp-read-write'
+  
+  Returns
+  -------
+  True if successful, raises an exception if not
+  """
+
+  try:
+    #
+    # save name of config file for other API functions:
+    #
+    global PHOTOAPP_CONFIG_FILE
+    PHOTOAPP_CONFIG_FILE = config_file
+
+    #
+    # configure boto for S3 access, make sure we can read necessary
+    # configuration info:
+    #
+    os.environ['AWS_SHARED_CREDENTIALS_FILE'] = config_file
+
+    boto3.setup_default_session(profile_name=s3_profile)
+
+    configur = ConfigParser()
+    configur.read(config_file)
+    bucketname = configur.get('s3', 'bucket_name')
+    regionname = configur.get('s3', 'region_name')
+
+    #
+    # also check to make sure we can read database server config info:
+    #
+    endpoint = configur.get('rds', 'endpoint')
+    portnum = int(configur.get('rds', 'port_number'))
+    username = configur.get('rds', 'user_name')
+    pwd = configur.get('rds', 'user_pwd')
+    dbname = configur.get('rds', 'db_name')
+
+    if username == mysql_user:
+      # we have password, all is good:
+      pass
+    else:
+      raise ValueError("mysql_user does not match user_name in [rds] section of config file")
+    
+    #
+    # success:
+    #
+    return True
+
+  except Exception as err:
+    logging.error("initialize():")
+    logging.error(str(err))
+    raise
+
+
+###################################################################
+#
+# get_ping
+#
+# To "ping" a system is to see if it's up and running. This 
+# function pings the bucket and the database server to make
+# sure they are up and running. Returns a tuple (M, N), where
+#
+#   M = # of items in the photoapp bucket
+#   N = # of users in the photoapp.users table
+#
+# If an error occurs / a service is not accessible, M or N
+# will be an error message. Hopefully the error messages will
+# convey what is going on (e.g. no internet connection).
+#
+def get_ping():
+  """
+  Based on the configuration file, retrieves the # of items in the S3 bucket and
+  the # of users in the photoapp.users table. Both values are returned as a tuple
+  (M, N), where M or N are replaced by error messages if an error occurs or a
+  service is not accessible.
+  
+  Parameters
+  ----------
+  N/A
+  
+  Returns
+  -------
+  the tuple (M, N) where M is the # of items in the S3 bucket and
+  N is the # of users in the photoapp.users table. If S3 is not
+  accessible then M is an error message; if database server is not
+  accessible then N is an error message.
+  """
+
+  def get_M():
+    try:
+      #
+      # access S3 and obtain the # of items in the bucket:
+      #
+      bucket = get_bucket()
+
+      assets = bucket.objects.all()
+
+      M = len(list(assets))
+      return M
+
+    except Exception as err:
+      logging.error("get_ping.get_M():")
+      logging.error(str(err))
+      raise
+
+    finally:
+      try:
+        bucket.close()
+      except:
+        pass
+  @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=30), reraise=True)
+  def get_N():
+    try:
+      #
+      # create connection to MySQL database server and then
+      # execute query to retrieve # of users:
+      #
+      dbConn = get_dbConn()
+      dbCursor = dbConn.cursor()
+
+      sql = """
+            SELECT count(userid) FROM users;
+            """
+      
+      dbCursor.execute(sql)
+      row = dbCursor.fetchone()
+
+      #
+      # we get back a tuple with one result in it:
+      #
+      N = row[0]
+      return N
+
+    except Exception as err:
+      logging.error("get_ping.get_N():")
+      logging.error(str(err))
+      raise
+    
+    finally:
+      try: 
+        dbCursor.close()
+      except: 
+        pass
+      try:
+        dbConn.close()
+      except:
+        pass
+
+  #
+  # we compute M and N separately so that we can do separate exception
+  # handling, and thus get partial results if one succeeds and one fails:
+  #
+  try:
+    M = get_M()
+  except Exception as err:
+    M = str(err)
+
+  try:
+    N = get_N()
+  except Exception as err:
+    N = str(err)
+
+  return (M, N)

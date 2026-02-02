@@ -9,24 +9,22 @@ import {
   getUsers,
   getImages,
   uploadImage,
-  getLabels,
-  searchImages,
+  getImageLabels,
+  searchImagesByLabel,
   downloadImage,
-  deleteImages
-} from "./api";
-
-interface Image {
-    image_id: string;
-    url: string;
-  }
+  deleteAllImages,
+  type User,
+  type Image,
+  type Label
+} from "../lib/api";
 
 export default function App() {
   
-  const [users, setUsers] = useState<string[]>([]);
-  const [selectedUser, setSelectedUser] = useState("");
+  const [users, setUsers] = useState<User[]>([]);
+  const [selectedUser, setSelectedUser] = useState<number | null>(null);
   const [images, setImages] = useState<Image[]>([]);
   const [searchLabel, setSearchLabel] = useState("");
-  const [labels, setLabels] = useState<Record<string, string[]>>({});
+  const [labels, setLabels] = useState<Record<number, Label[]>>({});
 
   
 
@@ -36,14 +34,19 @@ export default function App() {
       return;
     }
 
-    for (const file of newFiles) {
-      await uploadImage(file, selectedUser);
-    }
+    try {
+      for (const file of newFiles) {
+        await uploadImage(selectedUser, file);
+      }
 
-    toast.success("Upload complete");
-    const imgs = await getImages(selectedUser);
-    setImages(imgs);
-    setLabels({});
+      toast.success("Upload complete");
+      const imgs = await getImages(selectedUser);
+      setImages(imgs);
+      setLabels({});
+    } catch (error) {
+      toast.error("Upload failed");
+      console.error(error);
+    }
   };
 
 
@@ -93,20 +96,28 @@ export default function App() {
             <div className="space-y-2">
               <button
                 onClick={async () => {
-                  const data = await getUsers();
-                  setUsers(data);
+                  try {
+                    const data = await getUsers();
+                    setUsers(data);
+                    toast.success("Users loaded");
+                  } catch (error) {
+                    toast.error("Failed to load users");
+                    console.error(error);
+                  }
                 }}
                 className="px-3 py-2 bg-indigo-600 text-white rounded">
                 Load Users
               </button>
 
               <select
-                value={selectedUser}
-                onChange={e => setSelectedUser(e.target.value)}
+                value={selectedUser || ""}
+                onChange={e => setSelectedUser(e.target.value ? Number(e.target.value) : null)}
                 className="w-full border p-2 rounded">
                 <option value="">Select User</option>
                 {users.map(u => (
-                  <option key={u} value={u}>{u}</option>
+                  <option key={u.userid} value={u.userid}>
+                    {u.username} - {u.givenname} {u.familyname}
+                  </option>
                 ))}
               </select>
             </div>
@@ -140,9 +151,15 @@ export default function App() {
                   toast.error("Select a user first");
                   return;
                 }
-                const data = await getImages(selectedUser);
-                setImages(data);
-                setLabels({});
+                try {
+                  const data = await getImages(selectedUser);
+                  setImages(data);
+                  setLabels({});
+                  toast.success("Images loaded");
+                } catch (error) {
+                  toast.error("Failed to load images");
+                  console.error(error);
+                }
               }}
               className="px-4 py-2 bg-indigo-600 text-white rounded w-32 flex-none"
             >
@@ -164,9 +181,21 @@ export default function App() {
                   toast.error("Enter a label to search");
                   return;
                 }
-                const results = await searchImages(searchLabel);
-                setImages(results);
-                setLabels({});
+                try {
+                  const results = await searchImagesByLabel(searchLabel);
+                  const imageData: Image[] = results.map(r => ({
+                    assetid: r.assetid,
+                    userid: 0,
+                    localname: "",
+                    bucketkey: ""
+                  }));
+                  setImages(imageData);
+                  setLabels({});
+                  toast.success(`Found ${results.length} images`);
+                } catch (error) {
+                  toast.error("Search failed");
+                  console.error(error);
+                }
               }}
               className="px-4 py-2 bg-slate-900 text-white rounded w-24 flex-none">
               Search
@@ -176,10 +205,15 @@ export default function App() {
                 const ok = window.confirm("Are you sure you want to delete all images?");
                 if (!ok) return;
 
-                await deleteImages();
-                setImages([]);
-                setLabels({});
-                toast.success("All images deleted");
+                try {
+                  await deleteAllImages();
+                  setImages([]);
+                  setLabels({});
+                  toast.success("All images deleted");
+                } catch (error) {
+                  toast.error("Failed to delete images");
+                  console.error(error);
+                }
               }}
               className="px-4 py-2 bg-red-600 text-white rounded w-32"
             >
@@ -218,27 +252,49 @@ export default function App() {
                   <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-6">
                     <AnimatePresence mode="popLayout">
                       {images.map(img => (
-                        <div key={img.image_id} className="border p-2 rounded">
-                          <img src={img.url} alt="" className="mb-2"/>
+                        <div key={img.assetid} className="border p-2 rounded bg-white">
+                          <div className="mb-2 text-xs text-slate-600">
+                            Asset #{img.assetid}
+                          </div>
 
                           <button
-                            onClick={() => downloadImage(img.image_id)}
+                            onClick={async () => {
+                              try {
+                                const blob = await downloadImage(img.assetid);
+                                const url = URL.createObjectURL(blob);
+                                const a = document.createElement('a');
+                                a.href = url;
+                                a.download = img.localname || `image_${img.assetid}.jpg`;
+                                a.click();
+                                URL.revokeObjectURL(url);
+                                toast.success("Download started");
+                              } catch (error) {
+                                toast.error("Download failed");
+                                console.error(error);
+                              }
+                            }}
                             className="text-sm text-blue-600">
                             Download
                           </button>
 
                           <button
                             onClick={async () => {
-                              const data = await getLabels(img.image_id);
-                              setLabels(prev => ({ ...prev, [img.image_id]: data }));
+                              try {
+                                const data = await getImageLabels(img.assetid);
+                                setLabels(prev => ({ ...prev, [img.assetid]: data }));
+                                toast.success("Labels loaded");
+                              } catch (error) {
+                                toast.error("Failed to get labels");
+                                console.error(error);
+                              }
                             }}
                             className="text-sm text-green-600 ml-2">
                             Get Labels
                           </button>
 
-                          {labels[img.image_id] && (
+                          {labels[img.assetid] && (
                             <p className="text-xs mt-1">
-                              Labels: {labels[img.image_id].join(", ")}
+                              Labels: {labels[img.assetid].map(l => l.label).join(", ")}
                             </p>
                           )}
                         </div>
