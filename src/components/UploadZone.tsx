@@ -10,7 +10,7 @@ interface FileWithPreview extends File {
   progress: number;
 }
 
-export function UploadZone({ onUpload }: { onUpload: (files: FileWithPreview[]) => void }) {
+export function UploadZone({ onUpload }: { onUpload: (files: File[]) => void }) {
   const [isDragging, setIsDragging] = useState(false);
 
   const processFiles = (files: FileList | null) => {
