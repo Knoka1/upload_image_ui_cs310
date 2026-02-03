@@ -26,7 +26,13 @@ export default function App() {
   const [searchLabel, setSearchLabel] = useState("");
   const [labels, setLabels] = useState<Record<number, Label[]>>({});
 
-  
+  const btn =
+    "px-4 py-2 rounded-lg font-medium transition-colors duration-150 focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed";
+
+  const primaryBtn = `${btn} bg-indigo-600 text-white hover:bg-indigo-700 focus:ring-indigo-400`;
+  const darkBtn = `${btn} bg-slate-900 text-white hover:bg-slate-800 focus:ring-slate-600`;
+  const dangerBtn = `${btn} bg-red-600 text-white hover:bg-red-700 focus:ring-red-400`;
+
 
   const handleUpload = async (newFiles: File[]) => {
     if (!selectedUser) {
@@ -67,11 +73,6 @@ export default function App() {
             </div>
           </div>
           
-          <div className="hidden md:flex items-center gap-8">
-            <a href="#" className="text-sm font-medium text-slate-500 hover:text-indigo-600 transition-colors">Overview</a>
-            <a href="#" className="text-sm font-medium text-slate-500 hover:text-indigo-600 transition-colors">Shared</a>
-            <a href="#" className="text-sm font-medium text-slate-500 hover:text-indigo-600 transition-colors">Archive</a>
-          </div>
 
         </div>
       </nav>
@@ -105,7 +106,7 @@ export default function App() {
                     console.error(error);
                   }
                 }}
-                className="px-3 py-2 bg-indigo-600 text-white rounded">
+                className={primaryBtn}>
                 Load Users
               </button>
 
@@ -121,29 +122,6 @@ export default function App() {
                 ))}
               </select>
             </div>
-
-            <div className="space-y-6">
-              <div className="flex items-center justify-between text-sm font-medium">
-                <span className="text-slate-500">Storage Used</span>
-              </div>
-              <div className="h-2 w-full bg-slate-200 rounded-full overflow-hidden">
-                <motion.div
-                  initial={{ width: 0 }}
-                  animate={{ width: `${Math.min(images.length * 10, 100)}%` }}
-                  className="h-full bg-indigo-500"
-                />
-              </div>
-              
-              <div className="p-4 bg-indigo-50/50 border border-indigo-100 rounded-2xl flex gap-3 items-start">
-                <Info className="text-indigo-500 mt-0.5 shrink-0" size={18} />
-                <p className="text-xs text-indigo-700/80 leading-relaxed">
-                  data is sent to a server.
-                </p>
-              </div>
-            </div>
-          </div>
-
-          <div className="flex gap-3 mb-4 items-center">
             <button
               disabled={!selectedUser}
               onClick={async () => {
@@ -161,7 +139,7 @@ export default function App() {
                   console.error(error);
                 }
               }}
-              className="px-4 py-2 bg-indigo-600 text-white rounded w-32 flex-none"
+              className={primaryBtn}
             >
               Load Images
             </button>
@@ -197,7 +175,7 @@ export default function App() {
                   console.error(error);
                 }
               }}
-              className="px-4 py-2 bg-slate-900 text-white rounded w-24 flex-none">
+              className={darkBtn}>
               Search
             </button>
             <button
@@ -215,10 +193,31 @@ export default function App() {
                   console.error(error);
                 }
               }}
-              className="px-4 py-2 bg-red-600 text-white rounded w-32"
+              className={dangerBtn}
             >
               Delete Images
             </button>
+            <div className="space-y-6">
+              <div className="flex items-center justify-between text-sm font-medium">
+                <span className="text-slate-500">Storage Used</span>
+              </div>
+              <div className="h-2 w-full bg-slate-200 rounded-full overflow-hidden">
+                <motion.div
+                  initial={{ width: 0 }}
+                  animate={{ width: `${Math.min(images.length * 10, 100)}%` }}
+                  className="h-full bg-indigo-500"
+                />
+              </div>
+              
+              <div className="p-4 bg-indigo-50/50 border border-indigo-100 rounded-2xl flex gap-3 items-start">
+                <Info className="text-indigo-500 mt-0.5 shrink-0" size={18} />
+                <p className="text-xs text-indigo-700/80 leading-relaxed">
+                  data is sent to a server.
+                </p>
+              </div>
+              
+            </div>
+
           </div>
 
           <div className="lg:col-span-8">
@@ -273,7 +272,7 @@ export default function App() {
                                 console.error(error);
                               }
                             }}
-                            className="text-sm text-blue-600">
+                            className="text-xs px-3 py-1 rounded-md bg-blue-50 text-blue-600 hover:bg-blue-100 transition">
                             Download
                           </button>
 
@@ -288,7 +287,7 @@ export default function App() {
                                 console.error(error);
                               }
                             }}
-                            className="text-sm text-green-600 ml-2">
+                            className="ml-2 text-xs px-3 py-1 rounded-md bg-green-50 text-green-600 hover:bg-green-100 transition">
                             Get Labels
                           </button>
 
