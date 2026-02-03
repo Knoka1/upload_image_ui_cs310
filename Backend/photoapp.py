@@ -390,6 +390,8 @@ def get_image(assetid, local_filename=None):
         logging.error("get_image():")
         logging.error(str(err))
         raise
+
+
 def delete_images():
   @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=30), reraise=True)
   def delete_all_images():
