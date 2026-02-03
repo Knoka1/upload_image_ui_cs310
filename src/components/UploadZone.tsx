@@ -59,7 +59,7 @@ export function UploadZone({ onUpload }: { onUpload: (files: File[]) => void }) 
         Click or drag images here
       </h3>
       <p className="text-sm text-slate-500">
-        Support for PNG, JPG and WebP
+        Support for PNG and JPG
       </p>
     </div>
   );
